@@ -1,0 +1,44 @@
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+
+// The database schema. For type safety.
+export type Database = {
+  public: {
+    Tables: {
+      scores: {
+        Row: {
+          id: string;
+          wpm: number;
+          accuracy: number;
+          category: string;
+          created_at: string;
+          name: string;
+        };
+        Insert: {
+          id?: string;
+          wpm: number;
+          accuracy: number;
+          category: string;
+          name: string;
+        };
+        Update: {
+          wpm?: number;
+          accuracy?: number;
+          category?: string;
+          name?: string;
+        };
+        Relationships: [];
+      };
+    };
+    Views: {};
+    Functions: {};
+  };
+};
+
+// IMPORTANT: Replace these with your actual Supabase Project URL and Anon Key.
+// You can find these in your Supabase project settings under "API".
+const supabaseUrl = 'https://ttimpldzxjvrycglmsrp.supabase.co';
+const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0aW1wbGR6eGp2cnljZ2xtc3JwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2NTE4NzgsImV4cCI6MjA2OTIyNzg3OH0.yi-VBVylis1uGvTgblkugtms9T00k6GvWgrY4lCPoes';
+
+const supabase: SupabaseClient<Database> = createClient<Database>(supabaseUrl, supabaseAnonKey);
+
+export { supabase };
