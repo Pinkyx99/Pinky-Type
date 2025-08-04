@@ -3,12 +3,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { GameState, GameMode, GameConfig, SessionStats } from './types';
 import { WORDS, TIME_OPTIONS, WORD_COUNT_OPTIONS } from './constants';
 import { getUsername, setUsername as saveUsername } from './lib/user';
+import { isUsernameTaken } from './lib/leaderboard';
 import Keyboard from './components/Keyboard';
 import WordDisplay from './components/GameUI';
 import ResultsScreen from './components/ResultsScreen';
 import LeaderboardScreen from './components/LeaderboardScreen';
 import ConfettiEffect from './components/ConfettiEffect';
-import { Timer, Type, BrainCircuit, Play, Trophy, Edit, Check } from 'lucide-react';
+import { Timer, Type, BrainCircuit, Play, Trophy, Edit, Check, LoaderCircle } from 'lucide-react';
 
 const MotionDiv = motion.div;
 const MotionButton = motion.button;
@@ -18,13 +19,14 @@ const LobbyScreen: React.FC<{
     onGameStart: (config: GameConfig) => void;
     onShowLeaderboard: () => void;
     username: string | null;
-    onUsernameChange: (name: string) => void;
+    onUsernameChange: (name: string) => Promise<{success: boolean, error?: string}>;
 }> = ({ onGameStart, onShowLeaderboard, username, onUsernameChange }) => {
     const [mode, setMode] = useState<GameMode>(GameMode.WORDS);
     const [value, setValue] = useState(25);
     const [isEditingName, setIsEditingName] = useState(false);
     const [nameInput, setNameInput] = useState(username || '');
-
+    const [nameError, setNameError] = useState('');
+    const [isCheckingName, setIsCheckingName] = useState(false);
     const options = mode === GameMode.TIME ? TIME_OPTIONS : WORD_COUNT_OPTIONS;
 
     const cardVariants = {
@@ -36,39 +38,61 @@ const LobbyScreen: React.FC<{
         onGameStart({ mode, value: mode === GameMode.ZEN ? 0 : value });
     };
     
-    const handleNameSave = () => {
-        if (nameInput.trim().length >= 3) {
-            onUsernameChange(nameInput.trim());
+    const handleNameSave = async () => {
+        const newName = nameInput.trim();
+        if (newName.toLowerCase() === username) {
             setIsEditingName(false);
+            return;
         }
+
+        setIsCheckingName(true);
+        setNameError('');
+
+        const { success, error } = await onUsernameChange(newName);
+
+        if (success) {
+            setIsEditingName(false);
+        } else {
+            setNameError(error || 'An error occurred.');
+        }
+        setIsCheckingName(false);
     };
+
+    const handleEditClick = () => {
+        setNameInput(username || '');
+        setNameError('');
+        setIsEditingName(true);
+    }
 
     return (
         <MotionDiv key="lobby" initial={{ opacity: 0, y:20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="text-center flex flex-col items-center">
              <h1 className="text-5xl md:text-7xl lg:text-8xl font-black mb-2 text-glow text-sky-300">Pinky Type</h1>
             {username && (
-                <div className="flex items-center gap-2 mb-10 h-10">
+                <div className="flex flex-col items-center gap-2 mb-10 h-16">
                 {isEditingName ? (
-                    <div className="flex items-center gap-2">
-                        <input 
-                            type="text" 
-                            value={nameInput}
-                            onChange={(e) => setNameInput(e.target.value)}
-                            className="bg-gray-700 text-white rounded-md px-3 py-1 text-lg md:text-xl"
-                            minLength={3}
-                            maxLength={15}
-                        />
-                        <MotionButton onClick={handleNameSave} className="p-2 bg-sky-500 rounded-md">
-                            <Check size={20}/>
-                        </MotionButton>
+                    <div className="flex flex-col items-center gap-2">
+                        <div className="flex items-center gap-2">
+                            <input 
+                                type="text" 
+                                value={nameInput}
+                                onChange={(e) => setNameInput(e.target.value)}
+                                className="bg-gray-700 text-white rounded-md px-3 py-1 text-lg md:text-xl"
+                                minLength={3}
+                                maxLength={15}
+                            />
+                            <MotionButton onClick={handleNameSave} className="p-2 bg-sky-500 rounded-md" disabled={isCheckingName}>
+                                {isCheckingName ? <LoaderCircle size={20} className="animate-spin" /> : <Check size={20}/>}
+                            </MotionButton>
+                        </div>
+                        {nameError && <p className="text-red-400 text-sm">{nameError}</p>}
                     </div>
                 ) : (
-                    <>
+                    <div className="flex items-center gap-2">
                         <p className="text-lg md:text-xl text-slate-400">Welcome, <span className="font-bold text-sky-400">{username}</span>!</p>
-                        <MotionButton onClick={() => setIsEditingName(true)} className="p-2 text-slate-500 hover:text-sky-400">
+                        <MotionButton onClick={handleEditClick} className="p-2 text-slate-500 hover:text-sky-400">
                             <Edit size={16} />
                         </MotionButton>
-                    </>
+                    </div>
                 )}
                 </div>
             )}
@@ -184,7 +208,12 @@ const App: React.FC = () => {
     const mobileInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
-        setUsername(getUsername());
+        const storedUsername = getUsername();
+        if (storedUsername) {
+            // Ensure any name loaded from storage is also normalized.
+            // This handles legacy names that might have been stored with different casing.
+            setUsername(storedUsername.toLowerCase().trim());
+        }
     }, []);
 
     const generateWords = useCallback(() => {
@@ -333,9 +362,22 @@ const App: React.FC = () => {
         if (sound) { sound.currentTime = 0; sound.play().catch(e => {}); }
     };
     
-    const handleUsernameSet = (name: string) => {
-        saveUsername(name);
-        setUsername(name);
+    const handleUsernameSet = async (name: string): Promise<{success: boolean, error?: string}> => {
+        const normalizedName = name.trim().toLowerCase();
+        if (normalizedName.length < 3) return { success: false, error: 'Name must be at least 3 characters.' };
+        if (normalizedName.length > 15) return { success: false, error: 'Name must be 15 characters or less.' };
+
+        try {
+            const taken = await isUsernameTaken(normalizedName);
+            if (taken) {
+                return { success: false, error: 'This name is already taken.' };
+            }
+            saveUsername(normalizedName);
+            setUsername(normalizedName);
+            return { success: true };
+        } catch(e) {
+            return { success: false, error: e instanceof Error ? e.message : 'Could not verify name.' };
+        }
     }
     
     const restartGame = () => setGameState(GameState.LOBBY);

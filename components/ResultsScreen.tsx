@@ -12,7 +12,7 @@ interface ResultsScreenProps {
     config: GameConfig;
     onRestart: () => void;
     username: string | null;
-    onUsernameSet: (name: string) => void;
+    onUsernameSet: (name: string) => Promise<{success: boolean, error?: string}>;
 }
 
 const StatCard: React.FC<{ icon: React.ReactNode, label: string, value: string, delay: number, size?: 'large' | 'normal' }> = ({ icon, label, value, delay, size = 'normal' }) => {
@@ -46,16 +46,21 @@ const ResultsScreen: React.FC<ResultsScreenProps> = ({ stats, config, onRestart,
 
     const processScore = async (currentUsername: string) => {
         setError(null);
+        // The username passed here is expected to be lowercase
+        if (!currentUsername) return;
+
         setStatus('checking');
         try {
             const categoryKey = getLeaderboardCategoryKey(config);
             const personalBest = await getPersonalBest(currentUsername, categoryKey);
-            
-            if (stats.wpm > (personalBest || 0)) {
+            const newWpm = Math.round(stats.wpm);
+
+            // Use >= to update scores that are equal (e.g., to update accuracy/timestamp) or better.
+            if (newWpm >= (personalBest || 0)) {
                 setStatus('submitting');
                 await saveScoreToLeaderboard({
                     name: currentUsername,
-                    wpm: Math.round(stats.wpm),
+                    wpm: newWpm,
                     accuracy: stats.accuracy,
                     category: categoryKey,
                 });
@@ -76,6 +81,7 @@ const ResultsScreen: React.FC<ResultsScreenProps> = ({ stats, config, onRestart,
         }
 
         if (username) {
+            // username from props is already normalized to lowercase
             processScore(username);
         } else {
             // If there's no username, wait for them to submit one.
@@ -96,16 +102,17 @@ const ResultsScreen: React.FC<ResultsScreenProps> = ({ stats, config, onRestart,
         
         setStatus('checking_name');
         try {
-            const taken = await isUsernameTaken(cleanedName);
-            if (taken) {
-                setStatus('prompt_for_name');
-                setError("That username is already taken.");
-                return;
-            }
+            // Use the onUsernameSet function which now handles checking
+            const { success, error: checkError } = await onUsernameSet(cleanedName);
 
-            // Name is available, proceed.
-            onUsernameSet(cleanedName);
-            await processScore(cleanedName);
+            if (success) {
+                // Name is available and has been set in App state.
+                // Now process the score with the normalized (lowercase) name.
+                await processScore(lowerCaseName);
+            } else {
+                setStatus('prompt_for_name');
+                setError(checkError || "That username is already taken.");
+            }
         } catch (err) {
             setStatus('error');
             setError(err instanceof Error ? err.message : 'Could not verify username.');
@@ -154,6 +161,7 @@ const ResultsScreen: React.FC<ResultsScreenProps> = ({ stats, config, onRestart,
                                 />
                                 <MotionButton type="submit" whileHover={{scale:1.05}} className="p-3 bg-sky-500 rounded-lg font-bold"><UserPlus/></MotionButton>
                             </form>
+                             {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
                         </motion.div>
                     )}
                     {(status === 'checking' || status === 'submitting' || status === 'checking_name') && (
@@ -175,7 +183,7 @@ const ResultsScreen: React.FC<ResultsScreenProps> = ({ stats, config, onRestart,
                             </div>
                         </motion.div>
                     )}
-                    {(status === 'error' || error) && (
+                    {(status === 'error' && error) && (
                          <motion.div key="error" initial={{opacity:0, scale: 0.8}} animate={{opacity:1, scale: 1}} className="w-full max-w-md bg-yellow-900/30 border border-yellow-500/50 p-4 rounded-lg flex items-center gap-4">
                              <AlertTriangle className="w-8 h-8 text-yellow-400 shrink-0" />
                              <div>

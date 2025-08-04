@@ -24,19 +24,20 @@ export const getScoresForCategory = async (categoryKey: string): Promise<Leaderb
         console.error("Error fetching scores:", error);
         throw new Error(`Could not fetch scores: ${error.message}`);
     }
-    // The Row type for 'scores' is identical to LeaderboardEntry.
-    return (data as any) || [];
+    // With corrected types, `data` is correctly inferred and `as any` is not needed.
+    return data || [];
 };
 
 // --- Fetches a user's personal best WPM for a given category ---
 export const getPersonalBest = async (name: string, categoryKey: string): Promise<number | null> => {
     if (!supabase) return null;
 
-    // .maybeSingle() returns one object or null, which simplifies logic.
+    // Use `ilike` for case-insensitive matching to be robust against any legacy data
+    // that might not have been stored in lowercase.
     const { data, error } = await supabase
         .from('scores')
         .select('wpm')
-        .eq('name', name)
+        .ilike('name', name) // Use case-insensitive matching
         .eq('category', categoryKey)
         .order('wpm', { ascending: false })
         .limit(1)
@@ -47,7 +48,7 @@ export const getPersonalBest = async (name: string, categoryKey: string): Promis
         throw new Error(`Could not fetch personal best: ${error.message}`);
     }
 
-    return data ? (data as any).wpm : null;
+    return data ? data.wpm : null;
 };
 
 
@@ -55,46 +56,54 @@ export const getPersonalBest = async (name: string, categoryKey: string): Promis
 export const saveScoreToLeaderboard = async (entry: Database['public']['Tables']['scores']['Insert']) => {
     if (!supabase) return;
 
-    // Using .maybeSingle() to fetch one record or null, simplifies logic.
-    const { data: existing, error: selectError } = await supabase
+    // --- Robust Upsert Logic ---
+    // 1. Find all existing scores for this user and category. Names are lowercase, but we use ilike to be safe.
+    const { data: existingScores, error: findError } = await supabase
         .from('scores')
-        .select('id, wpm')
-        .eq('name', entry.name)
-        .eq('category', entry.category)
-        .maybeSingle();
+        .select('id')
+        .ilike('name', entry.name)
+        .eq('category', entry.category);
 
-    if (selectError) {
-        throw new Error(`Could not check for existing score: ${selectError.message}`);
+    if (findError) {
+        console.error('Error finding existing scores:', findError.message);
+        throw new Error('Could not check for existing scores.');
     }
 
-    if (existing) {
-        // Only update if the new WPM is higher
-        if (entry.wpm > (existing as any).wpm) {
-            const { error: updateError } = await supabase
-                .from('scores')
-                .update({ wpm: entry.wpm, accuracy: entry.accuracy } as any)
-                .eq('id', (existing as any).id);
-            if (updateError) {
-                 throw new Error(`Failed to update score: ${updateError.message}`);
-            }
+    // 2. If any old scores exist, delete them by their specific IDs.
+    if (existingScores && existingScores.length > 0) {
+        const idsToDelete = existingScores.map(score => score.id);
+        const { error: deleteError } = await supabase
+            .from('scores')
+            .delete()
+            .in('id', idsToDelete);
+        
+        if (deleteError) {
+            console.error('Error clearing previous scores:', deleteError.message);
+            throw new Error('Could not clear previous scores before saving.');
         }
-    } else {
-        // Insert a new record
-        const { error: insertError } = await supabase.from('scores').insert(entry as any);
-        if (insertError) {
-            throw new Error(`Failed to save score: ${insertError.message}`);
-        }
+    }
+
+    // 3. Insert the new high score record. This is now the only record for this user/category.
+    const { error: insertError } = await supabase
+        .from('scores')
+        .insert([entry]);
+
+    if (insertError) {
+        console.error('Error inserting new score:', insertError.message);
+        throw new Error(`Failed to save new score: ${insertError.message}`);
     }
 };
+
 
 // --- Checks if a username is already taken in the leaderboard ---
 export const isUsernameTaken = async (name: string): Promise<boolean> => {
     if (!supabase) return false;
 
+    // Name is expected to be lowercase, but check is case-insensitive to be robust.
     const { count, error } = await supabase
         .from('scores')
         .select('*', { count: 'exact', head: true }) // Get count without fetching data
-        .ilike('name', name); // Case-insensitive match
+        .ilike('name', name); // Case-insensitive check is more robust
 
     if (error) {
         console.error("Error checking username:", error);
